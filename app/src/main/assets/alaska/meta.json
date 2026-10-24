@@ -1,0 +1,19 @@
+{
+ "built": "2026-10-22",
+ "counts": {
+  "blm": 5002,
+  "blm_skipped_kodiak": 339,
+  "rs2477": 2586,
+  "dnr_pt": 6,
+  "dnr_skipped_status": 220,
+  "dnr_line": 741,
+  "dnr_poly": 2261
+ },
+ "rs2477_refreshed": "2026-10-22",
+ "dnr_refreshed": "2026-10-22",
+ "sources": {
+  "blm17b": "https://gis.blm.gov/akarcgis/rest/services/lands/BLM_AK_Easements_17b/FeatureServer (layers 0,1)",
+  "rs2477": "https://arcgis.dnr.alaska.gov/arcgis/rest/services/OpenData/Infrastructure_RS2477Trails/FeatureServer/0",
+  "dnr": "https://arcgis.dnr.alaska.gov/arcgis/rest/services/OpenData/LandActivity_Easement/FeatureServer (0,1,2) where PUBLIC EASEMENT + ACCESS, status issued/transferred/interim"
+ }
+}

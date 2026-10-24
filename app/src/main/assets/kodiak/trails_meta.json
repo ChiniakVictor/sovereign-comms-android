@@ -1,0 +1,28 @@
+{
+ "source": "Kodiak Island Borough KIB_Trails",
+ "url": "https://services1.arcgis.com/R5BNizttyFKxRSMm/arcgis/rest/services/KIB_Trails/FeatureServer/0",
+ "data_edited": "2025-08-19",
+ "fetched": "2026-10-11",
+ "raw_records": 964,
+ "skipped_null_geometry": 3,
+ "features": 77,
+ "names": 70,
+ "miles": 265.5,
+ "vertices_in": 97612,
+ "vertices_out": 16805,
+ "tolerance_m": 1.5,
+ "renamed": {
+  "'No Name' -> Pillar to Devils Prongs Route": 1,
+  "'Old Womens Mountain' -> Old Woman Mountain": 6,
+  "'Saltrey Cove Road' -> Saltery Cove Road": 1,
+  "'Kalsin Bay to Summit Lake Trail' -> Kalsin Bay to Summit Lake Trails": 1,
+  "'Zenter Creek Spur ' -> Zentner Creek Spur": 1,
+  "None -> Near Island Trails": 6
+ },
+ "miles_by_class": {
+  "double": 164.2,
+  "single": 81.7,
+  "route": 17.6,
+  "shared": 2.0
+ }
+}

@@ -1,0 +1,88 @@
+{
+ "built": "2026-10-18T04:53+00:00",
+ "fetched": "2026-10-17",
+ "counts": {
+  "site": 98,
+  "air": 14,
+  "airstrip": 1,
+  "road": 29,
+  "trail25": 188,
+  "trail50": 3,
+  "utility": 6,
+  "patent_only": 2
+ },
+ "row_segments": [
+  {
+   "route": "Rezanof Drive",
+   "mp": "0.0-0.8",
+   "width_ft": 100,
+   "basis": "assumed"
+  },
+  {
+   "route": "Rezanof Drive",
+   "mp": "0.8-1.5",
+   "width_ft": 170,
+   "basis": "measured"
+  },
+  {
+   "route": "Rezanof Drive",
+   "mp": "1.5-2.1",
+   "width_ft": 200,
+   "basis": "measured"
+  },
+  {
+   "route": "Rezanof Drive",
+   "mp": "2.1-5.2",
+   "width_ft": 100,
+   "basis": "assumed"
+  },
+  {
+   "route": "Rezanof Drive",
+   "mp": "5.2-6.0",
+   "width_ft": 210,
+   "basis": "measured"
+  },
+  {
+   "route": "Rezanof Drive",
+   "mp": "6.0-13.0",
+   "width_ft": 100,
+   "basis": "assumed"
+  },
+  {
+   "route": "Rezanof Drive",
+   "mp": "13.0-13.7",
+   "width_ft": 130,
+   "basis": "measured"
+  },
+  {
+   "route": "Rezanof Drive",
+   "mp": "13.7-14.0",
+   "width_ft": 140,
+   "basis": "measured"
+  },
+  {
+   "route": "Rezanof Drive",
+   "mp": "14.0-14.5",
+   "width_ft": 100,
+   "basis": "assumed"
+  },
+  {
+   "route": "Rezanof Drive",
+   "mp": "14.5-14.7",
+   "width_ft": 150,
+   "basis": "measured"
+  },
+  {
+   "route": "Chiniak Highway",
+   "mp": "0.0-0.5",
+   "width_ft": 160,
+   "basis": "measured"
+  },
+  {
+   "route": "Chiniak Highway",
+   "mp": "0.5-34.2",
+   "width_ft": 100,
+   "basis": "assumed"
+  }
+ ]
+}

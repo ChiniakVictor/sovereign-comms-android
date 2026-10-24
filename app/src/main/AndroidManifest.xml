@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" tools:targetApi="31" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <!-- 2.0 app-to-app calls -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+
+    <application
+        android:name=".TrailLinkApp"
+        android:label="Sovereign Comms"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher"
+        android:theme="@style/Theme.TrailLink"
+        android:allowBackup="false"
+        android:supportsRtl="true">
+        <activity android:name=".ui.MainActivity" android:exported="true" android:launchMode="singleTop"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|density"
+            android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <provider android:name=".service.StatusProvider" android:authorities="com.victor.traillink.status"
+            android:exported="true" android:grantUriPermissions="false" />
+        <receiver android:name=".service.ReplyReceiver" android:exported="false" />
+        <receiver android:name=".service.NavStopReceiver" android:exported="false" />
+        <activity android:name=".call.CallActivity" android:exported="false" android:launchMode="singleTop"
+            android:showWhenLocked="true" android:turnScreenOn="true" android:excludeFromRecents="true"
+            android:taskAffinity="com.victor.traillink.call" android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|density"
+            tools:targetApi="27" />
+        <receiver android:name=".call.CallActionReceiver" android:exported="false" />
+        <service android:name=".map.world.MapDownloadService" android:exported="false" android:foregroundServiceType="dataSync" />
+        <service android:name=".call.CallService" android:exported="false" android:foregroundServiceType="microphone" />
+        <service android:name=".service.LinkService" android:exported="false"
+            android:foregroundServiceType="connectedDevice|location|dataSync" />
+    </application>
+</manifest>

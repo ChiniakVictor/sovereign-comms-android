@@ -1,0 +1,11 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android" android:width="108dp" android:height="108dp" android:viewportWidth="108" android:viewportHeight="108">
+    <!-- Sovereign Comms: shield with a radio mast and waves -->
+    <path android:fillColor="#FF263238" android:strokeColor="#FFFFB74D" android:strokeWidth="3"
+        android:pathData="M54,22 L80,32 L80,54 C80,70 68,81 54,86 C40,81 28,70 28,54 L28,32 Z"/>
+    <path android:fillColor="#FFECEFF1" android:pathData="M51,50 L57,50 L60,74 L48,74 Z"/>
+    <path android:fillColor="#FF40C4FF" android:pathData="M54,42m-5,0a5,5 0,1 1,10 0a5,5 0,1 1,-10 0"/>
+    <path android:strokeColor="#FF40C4FF" android:strokeWidth="3" android:strokeLineCap="round" android:fillColor="#00000000"
+        android:pathData="M44,35 A14,14 0,0 0,44 49 M64,35 A14,14 0,0 1,64 49"/>
+    <path android:strokeColor="#FF40C4FF" android:strokeWidth="3" android:strokeLineCap="round" android:fillColor="#00000000"
+        android:pathData="M38,30 A21,21 0,0 0,38 54 M70,30 A21,21 0,0 1,70 54"/>
+</vector>
