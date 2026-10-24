@@ -83,6 +83,8 @@ fun InternetScreen(vm: AppViewModel) {
                     if (link.lastPublish > 0) Text("Last sent ${Geo.formatAge(now - link.lastPublish)}", fontSize = 15.sp)
                     else if (s.netSharing && st == NetLink.NetStatus.ONLINE) Text("Online, but nothing sent yet — waiting for this phone's position", fontSize = 15.sp, color = Color(0xFFFFD740))
                     if (link.forwarded > 0) Text("Forwarded ${link.forwarded} radio positions", fontSize = 15.sp)
+                    if (link.backfillOut) Text("Out of service: recording your track every 45 s (${link.backfillQueued} points). It's sent to your group when you're back online.", fontSize = 15.sp, color = androidx.compose.ui.graphics.Color(0xFFFFD740))
+                    else if (link.backfillQueued > 1) Text("Sending ${link.backfillQueued} points recorded while out of service…", fontSize = 15.sp)
                     if (!s.internetAllowed) Text("Transport is set to Radio only — internet is off.", color = Color(0xFFFFD740))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         BigButton("Change passcode", Modifier.weight(1f), primary = false) { editing = true }

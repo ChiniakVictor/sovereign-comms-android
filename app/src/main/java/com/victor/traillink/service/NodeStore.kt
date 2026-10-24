@@ -109,6 +109,26 @@ class NodeStore(private val dao: TrailDao) {
         return newer
     }
 
+    /** 2.5: a partner's out-of-service track. Adds the points that fill gaps in their trail; returns how many were added. */
+    suspend fun onBackfill(b: com.victor.traillink.core.Backfill, now: Long = System.currentTimeMillis()): Int {
+        if (b.points.isEmpty()) return 0
+        val num = netNum(b.id)
+        val newest = b.points.maxOf { it.ts }
+        if (com.victor.traillink.data.RemovedPartners.hides(num, newest)) return 0
+        val lo = b.points.minOf { it.ts } - com.victor.traillink.core.BackfillMerge.DEDUPE_MS
+        val hi = newest + com.victor.traillink.core.BackfillMerge.DEDUPE_MS
+        val add = com.victor.traillink.core.BackfillMerge.select(dao.pointTimes(num, lo, hi), b.points, now)
+        if (add.isEmpty()) return 0
+        val old = dao.node(num)
+        var e = (old ?: NodeEntity(num, b.name.ifBlank { "Phone ${b.id}" }, b.short.ifBlank { b.id.take(4) }, netId = b.id))
+        val last = add.last()
+        if (last.ts > e.posTime) e = e.copy(lat = last.lat, lon = last.lon, altM = last.alt ?: e.altM, posTime = last.ts, posSource = "net", accM = last.acc)
+        e = e.copy(lastHeard = maxOf(e.lastHeard, last.ts))
+        dao.upsert(e)
+        add.forEach { p -> dao.insert(TrackPoint(nodeNum = num, time = p.ts, lat = p.lat, lon = p.lon, altM = p.alt, bf = true)) }
+        return add.size
+    }
+
     private fun withFix(e: NodeEntity, f: Fix, t: Long) =
         if (t >= e.posTime) e.copy(lat = f.lat, lon = f.lon, altM = f.altM ?: e.altM, posTime = t) else e
 

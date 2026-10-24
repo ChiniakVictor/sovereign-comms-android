@@ -43,6 +43,8 @@ data class LinkState(
     val netDetail: String? = null,
     val lastPublish: Long = 0,
     val forwarded: Int = 0,
+    val backfillQueued: Int = 0,      // 2.5: points recorded while out of service, not yet sent
+    val backfillOut: Boolean = false, // 2.5: out of service (recording for backfill)
     val locationOn: Boolean = true,   // system Location switch
     val lastFixAt: Long = 0,
     val msgTick: Int = 0,

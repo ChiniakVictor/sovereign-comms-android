@@ -39,6 +39,8 @@ data class TrackPoint(
     val rssi: Int? = null,
     val battery: Int? = null,
     val demo: Boolean = false,
+    /** 2.5: recorded while the partner was out of service and sent later (drawn dashed) */
+    @androidx.room.ColumnInfo(defaultValue = "0") val bf: Boolean = false,
 )
 
 /** Chat message (group or direct), also used for voice clips (kind = "voice"). */
@@ -136,6 +138,9 @@ interface TrailDao {
     @Query("SELECT * FROM points WHERE time >= :since ORDER BY nodeNum, time")
     suspend fun pointsSinceNow(since: Long): List<TrackPoint>
 
+    @Query("SELECT time FROM points WHERE nodeNum = :num AND time BETWEEN :from AND :to")
+    suspend fun pointTimes(num: Long, from: Long, to: Long): List<Long>
+
     @Query("SELECT * FROM points WHERE nodeNum = :num ORDER BY time DESC LIMIT 1")
     suspend fun lastPoint(num: Long): TrackPoint?
 
@@ -152,7 +157,7 @@ interface TrailDao {
     @Query("UPDATE nodes SET isSelf = 0 WHERE num != :num") suspend fun clearSelfExcept(num: Long)
 }
 
-@Database(entities = [NodeEntity::class, TrackPoint::class, MessageEntity::class, PinEntity::class], version = 6, exportSchema = false)
+@Database(entities = [NodeEntity::class, TrackPoint::class, MessageEntity::class, PinEntity::class], version = 7, exportSchema = false)
 abstract class TrailDb : RoomDatabase() {
     abstract fun dao(): TrailDao
     abstract fun msgs(): MsgDao
@@ -161,7 +166,7 @@ abstract class TrailDb : RoomDatabase() {
     companion object {
         @Volatile private var inst: TrailDb? = null
         fun get(ctx: Context): TrailDb = inst ?: synchronized(this) {
-            inst ?: Room.databaseBuilder(ctx.applicationContext, TrailDb::class.java, "trail.db").addMigrations(PURGE_DEMO_2_3, ADD_ACC_3_4, ADD_MESSAGES_4_5, ADD_PINS_5_6).fallbackToDestructiveMigration().build().also { inst = it }
+            inst ?: Room.databaseBuilder(ctx.applicationContext, TrailDb::class.java, "trail.db").addMigrations(PURGE_DEMO_2_3, ADD_ACC_3_4, ADD_MESSAGES_4_5, ADD_PINS_5_6, ADD_BACKFILL_6_7).fallbackToDestructiveMigration().build().also { inst = it }
         }
     }
 }
@@ -197,3 +202,8 @@ val ADD_PINS_5_6 = object : androidx.room.migration.Migration(5, 6) {
 val PINS_SQL = listOf(
     "CREATE TABLE IF NOT EXISTS `pins` (`id` TEXT NOT NULL, `name` TEXT NOT NULL, `kind` TEXT NOT NULL, `color` INTEGER NOT NULL, `note` TEXT NOT NULL, `lat` REAL NOT NULL, `lon` REAL NOT NULL, `alt` INTEGER, `byKey` TEXT NOT NULL, `byName` TEXT NOT NULL, `created` INTEGER NOT NULL, `updated` INTEGER NOT NULL, `expires` INTEGER NOT NULL, `shared` INTEGER NOT NULL, `mine` INTEGER NOT NULL, `hidden` INTEGER NOT NULL, `deleted` INTEGER NOT NULL, `emoji` TEXT, PRIMARY KEY(`id`))"
 )
+
+/** 2.4 -> 2.5: backfilled-point flag on trail points (keeps all data). */
+val ADD_BACKFILL_6_7 = object : androidx.room.migration.Migration(6, 7) {
+    override fun migrate(db: androidx.sqlite.db.SupportSQLiteDatabase) { db.execSQL("ALTER TABLE points ADD COLUMN bf INTEGER NOT NULL DEFAULT 0") }
+}

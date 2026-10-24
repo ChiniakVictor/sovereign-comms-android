@@ -52,15 +52,15 @@ class NetLink(
                 online = true
                 onStatus(NetStatus.ONLINE, brokerUrl)
                 val g = NetCrypto.groupTopic(netKey)
-                runCatching { client.subscribe(arrayOf(filter, "$g/o/+", "$g/vc/+/+", "$g/v/+", "$g/p/+/+", "$g/c/$myId/+"), intArrayOf(1, 1, 1, 0, 1, 1)) }
+                runCatching { client.subscribe(arrayOf(filter, "$g/o/+", "$g/vc/+/+", "$g/v/+", "$g/p/+/+", "$g/c/$myId/+", "$g/b/+/+"), intArrayOf(1, 1, 1, 0, 1, 1, 1)) }
             }
             override fun connectionLost(cause: Throwable?) { online = false; onStatus(NetStatus.OFFLINE, cause?.message) }
             override fun messageArrived(topic: String, message: MqttMessage) {
-                if (topic.endsWith("/$myId") || topic.contains("/$myId-") || topic.contains("/vc/$myId/") || topic.contains("/p/$myId/")) return  // our own echo
+                if (topic.endsWith("/$myId") || topic.contains("/$myId-") || topic.contains("/vc/$myId/") || topic.contains("/p/$myId/") || topic.contains("/b/$myId/")) return  // our own echo
                 val g = NetCrypto.groupTopic(netKey) + "/"
                 val rel = topic.removePrefix(g)
                 if (rel.startsWith("c/$myId/")) { if (message.payload.isNotEmpty()) onOther(rel, message.payload); return }   // call signaling (2.0)
-                if (rel.startsWith("o/") || rel.startsWith("v/") || rel.startsWith("vc/") || rel.startsWith("p/")) { if (message.payload.isNotEmpty()) onOther(rel, message.payload); return }
+                if (rel.startsWith("o/") || rel.startsWith("v/") || rel.startsWith("vc/") || rel.startsWith("p/") || rel.startsWith("b/")) { if (message.payload.isNotEmpty()) onOther(rel, message.payload); return }
                 if (message.payload.isEmpty()) return               // retained message cleared
                 NetCrypto.open(netKey, message.payload)?.let(onPosition)
             }
@@ -81,13 +81,31 @@ class NetLink(
 
     @Volatile private var stopped = false
 
-    /** Publishes a position as the retained last message on this sender's (or forwarded node's) topic. */
-    fun publish(p: NetPosition): Boolean {
+    /**
+     * Publishes a position as the retained last message on this sender's (or forwarded node's) topic.
+     * 2.5: [onAck] runs when the broker confirms it (QoS 1 PUBACK), or with false when delivery fails.
+     */
+    fun publish(p: NetPosition, onAck: ((Boolean) -> Unit)? = null): Boolean {
         if (!online) return false
         val sub = if (p.src == NetPosition.SRC_LORA && p.node != null) "$myId-%08x".format(p.node) else myId
         return try {
-            client.publish(NetCrypto.groupTopic(netKey) + "/" + sub, MqttMessage(NetCrypto.seal(netKey, p)).apply { qos = 1; isRetained = true })
+            val m = MqttMessage(NetCrypto.seal(netKey, p)).apply { qos = 1; isRetained = true }
+            if (onAck == null) client.publish(NetCrypto.groupTopic(netKey) + "/" + sub, m)
+            else client.publish(NetCrypto.groupTopic(netKey) + "/" + sub, m, null, object : IMqttActionListener {
+                override fun onSuccess(t: IMqttToken?) { onAck(true) }
+                override fun onFailure(t: IMqttToken?, e: Throwable?) { onAck(false) }
+            })
             true
+        } catch (e: Exception) { false }
+    }
+
+    /** 2.5: publishes and blocks until the broker confirms (QoS 1) or [timeoutMs] passes. Call off the main thread. */
+    fun publishConfirmed(sub: String, bytes: ByteArray, retained: Boolean, timeoutMs: Long): Boolean {
+        if (!online) return false
+        return try {
+            val t = client.publish(NetCrypto.groupTopic(netKey) + "/" + sub, MqttMessage(bytes).apply { qos = 1; isRetained = retained })
+            t.waitForCompletion(timeoutMs)
+            t.isComplete && t.exception == null
         } catch (e: Exception) { false }
     }
 
@@ -101,7 +119,8 @@ class NetLink(
     /** Removes our retained position from the broker (used when sharing is turned off). */
     fun clearRetained(extraSubs: Collection<String> = emptyList()) {
         if (!online) return
-        (listOf(myId, "o/$myId") + (0 until com.victor.traillink.core.VoiceWire.SLOTS).map { "vc/$myId/$it" } + extraSubs).forEach { s ->
+        (listOf(myId, "o/$myId") + (0 until com.victor.traillink.core.VoiceWire.SLOTS).map { "vc/$myId/$it" } +
+            (0 until com.victor.traillink.core.BackfillWire.SLOTS).map { com.victor.traillink.core.BackfillWire.sub(myId, it) } + extraSubs).forEach { s ->
             runCatching { client.publish(NetCrypto.groupTopic(netKey) + "/" + s, ByteArray(0), 1, true).waitForCompletion(5000) }
         }
     }

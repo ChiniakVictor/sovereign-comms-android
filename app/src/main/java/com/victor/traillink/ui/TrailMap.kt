@@ -366,9 +366,9 @@ fun TrailMap(
     LaunchedEffect(styleGen, partners, phone, focus, tracksVisible, hiddenTracks) {
         val st = handle.style ?: return@LaunchedEffect
         val trails = partners.filter { tracksVisible && it.node.num !in hiddenTracks && it.trail.size >= 2 }.flatMap { p ->
-            trailSegments(p.trail).map { seg ->
+            trailSegments(p.trail).flatMap { backfillRuns(it) }.map { (bf, seg) ->
                 Feature.fromGeometry(LineString.fromLngLats(seg.map { Point.fromLngLat(it.lon, it.lat) })).apply {
-                    addStringProperty("color", hex(p.color)); addBooleanProperty("focus", p.node.num == focus)
+                    addStringProperty("color", hex(p.color)); addBooleanProperty("focus", p.node.num == focus); addBooleanProperty("bf", bf)
                 }
             }
         }
@@ -412,6 +412,21 @@ fun trailSegments(pts: List<com.victor.traillink.data.TrackPoint>): List<List<co
     return out
 }
 
+/**
+ * 2.5: splits one trail segment into runs of live and backfilled (recorded while out of service, sent later) points.
+ * A line piece is "backfilled" if either end is a backfilled point. Runs share their end points, so the line stays joined.
+ */
+fun backfillRuns(seg: List<com.victor.traillink.data.TrackPoint>): List<Pair<Boolean, List<com.victor.traillink.data.TrackPoint>>> {
+    if (seg.size < 2) return emptyList()
+    val out = mutableListOf<Pair<Boolean, MutableList<com.victor.traillink.data.TrackPoint>>>()
+    for (i in 1 until seg.size) {
+        val bf = seg[i - 1].bf || seg[i].bf
+        val cur = out.lastOrNull()
+        if (cur != null && cur.first == bf) cur.second += seg[i] else out += bf to mutableListOf(seg[i - 1], seg[i])
+    }
+    return out
+}
+
 /** Polygon approximating a circle of [radiusM] metres (accuracy ring). */
 private fun accuracyCircle(lat: Double, lon: Double, radiusM: Double): org.maplibre.geojson.Polygon {
     val pts = (0..48).map { i ->
@@ -449,7 +464,11 @@ private fun setupLayers(st: Style) {
         lineCap(Property.LINE_CAP_ROUND), lineJoin(Property.LINE_JOIN_ROUND)))
     st.addLayer(LineLayer("trails", "trails").withProperties(
         lineColor(toColor(get("color"))), lineWidth(switchCase(get("focus"), literal(6f), literal(4f))),
-        lineCap(Property.LINE_CAP_ROUND), lineJoin(Property.LINE_JOIN_ROUND)))
+        lineCap(Property.LINE_CAP_ROUND), lineJoin(Property.LINE_JOIN_ROUND)).withFilter(neq(get("bf"), literal(true))))
+    // 2.5: backfilled stretches (sent after the partner got back into service) are dashed and a little lighter
+    st.addLayer(LineLayer("trails-bf", "trails").withProperties(
+        lineColor(toColor(get("color"))), lineOpacity(0.85f), lineWidth(switchCase(get("focus"), literal(6f), literal(4f))),
+        lineDasharray(arrayOf(1.6f, 1.1f)), lineJoin(Property.LINE_JOIN_ROUND)).withFilter(eq(get("bf"), literal(true))))
     st.addLayer(LineLayer("mytrack-casing", "mytrack").withProperties(lineColor("#000000"), lineOpacity(0.5f), lineWidth(6f),
         lineCap(Property.LINE_CAP_ROUND), lineJoin(Property.LINE_JOIN_ROUND)))
     st.addLayer(LineLayer("mytrack", "mytrack").withProperties(lineColor("#82B1FF"), lineWidth(3f), lineDasharray(arrayOf(1.5f, 1f)),

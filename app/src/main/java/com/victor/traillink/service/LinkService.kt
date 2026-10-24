@@ -122,6 +122,11 @@ class LinkService : LifecycleService(), MeshBle.Listener, LinkRepo.Controller {
     private var lastPubFix: android.location.Location? = null
     private var lastPubAt = 0L
     private var lastLoc: android.location.Location? = null
+    /** 2.5: 45 s out-of-service track queue (filesDir/backfill), sent as a backfill when the link is back. */
+    private val outage by lazy { com.victor.traillink.core.OutageQueue(java.io.File(filesDir, "backfill")) }
+    @Volatile private var liveSentAt = 0L          // last live position handed to MQTT and not yet confirmed (0 = none)
+    @Volatile private var backfillBusy = false
+    @Volatile private var backfillTriedAt = 0L
     private var locator: PhoneLocator? = null
     val pins: PinHub by lazy { PinHub(this, lifecycleScope, messengerHost) }
     val voice: VoiceHub by lazy { VoiceHub(this, lifecycleScope, { net }, { netKey }) }
@@ -143,7 +148,8 @@ class LinkService : LifecycleService(), MeshBle.Listener, LinkRepo.Controller {
         LinkRepo.update { it.copy(locationOn = PhoneLocator.systemEnabled(this@LinkService)) }
         ContextCompat.registerReceiver(this, locReceiver, android.content.IntentFilter(android.location.LocationManager.PROVIDERS_CHANGED_ACTION), ContextCompat.RECEIVER_NOT_EXPORTED)
         lifecycleScope.launch { Prefs.settings.collect { refreshNet() } }
-        lifecycleScope.launch { while (isActive) { delay(10_000); maybePublish(force = false) } }
+        lifecycleScope.launch { while (isActive) { delay(10_000); maybePublish(force = false); checkService() } }
+        lifecycleScope.launch(Dispatchers.IO) { outage.size() }   // load the 2.5 backfill queue off the main thread
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -367,9 +373,14 @@ class LinkService : LifecycleService(), MeshBle.Listener, LinkRepo.Controller {
         if (sig == netSig) { updateLocationRequests(); if (net != null) ensureLocationOn("sharing"); return }
         stopNet(clearRetained = false)
         netSig = sig
-        if (!want) { updateLocationRequests(); return }
+        if (!want) {
+            // sharing is off: what was recorded while out of service is never sent later
+            lifecycleScope.launch(Dispatchers.IO) { if (outage.size() > 0) { outage.clear(); LinkRepo.log("Out-of-service track discarded (sharing off)") } }
+            updateLocationRequests(); return
+        }
         val key = s.netKeyHex!!.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
         netKey = key
+        outage.bind(com.victor.traillink.core.NetCrypto.groupId(key))
         goForeground()
         try {
             val link = NetLink(s.brokerUrl, s.brokerUser, s.brokerPass, key, s.deviceId,
@@ -381,7 +392,7 @@ class LinkService : LifecycleService(), MeshBle.Listener, LinkRepo.Controller {
                         LinkRepo.log("Internet: online (${s.brokerUrl})"); maybePublish(force = true)
                         lifecycleScope.launch(Dispatchers.IO) { messenger.publishOutbox(); pins.publishAllMine() }
                     }
-                    else if (st == NetLink.NetStatus.OFFLINE) LinkRepo.log("Internet: offline ${d ?: ""}")
+                    else if (st == NetLink.NetStatus.OFFLINE) { outage.markTrouble(); LinkRepo.log("Internet: offline ${d ?: ""}") }
                     updateNotification()
                 })
             net = link
@@ -417,6 +428,7 @@ class LinkService : LifecycleService(), MeshBle.Listener, LinkRepo.Controller {
         when {
             rel.startsWith("o/") -> lifecycleScope.launch(Dispatchers.IO) { messenger.onOutbox(bytes) }
             rel.startsWith("p/") -> lifecycleScope.launch(Dispatchers.IO) { pins.onNet(bytes) }
+            rel.startsWith("b/") -> lifecycleScope.launch(Dispatchers.IO) { onBackfill(rel, bytes) }
             rel.startsWith("v/") || rel.startsWith("vc/") -> voice.onNet(rel, bytes)
             rel.startsWith("c/") -> com.victor.traillink.call.CallManager.onNet(this, rel, bytes)
         }
@@ -508,6 +520,14 @@ class LinkService : LifecycleService(), MeshBle.Listener, LinkRepo.Controller {
         PhoneLocation.last = l.latitude to l.longitude
         MyTrack.onFix(this, l.latitude, l.longitude, if (l.hasAccuracy()) l.accuracy else null, if (l.hasAltitude()) l.altitude.toInt() else null)
         LinkRepo.update { it.copy(lastFixAt = System.currentTimeMillis()) }
+        // 2.5: every ~45 s while sharing; kept only while out of service (see core/Backfill.kt)
+        if (net != null) {
+            val ts = System.currentTimeMillis()
+            lifecycleScope.launch(Dispatchers.IO) {
+                outage.offer(com.victor.traillink.core.BfPoint(ts, l.latitude, l.longitude, if (l.hasAccuracy()) l.accuracy else null,
+                    if (l.hasSpeed()) l.speed else null, if (l.hasAltitude()) l.altitude.toInt() else null))
+            }
+        }
         maybePublish(force = false)
     }
 
@@ -528,10 +548,67 @@ class LinkService : LifecycleService(), MeshBle.Listener, LinkRepo.Controller {
             alt = if (l.hasAltitude()) l.altitude.toInt() else null, acc = if (l.hasAccuracy()) l.accuracy else null,
             speed = if (l.hasSpeed()) l.speed else null, heading = if (l.hasBearing()) l.bearing else null,
             battery = bat, ts = now, seq = Prefs.nextSeq(this), src = com.victor.traillink.core.NetPosition.SRC_PHONE)
-        if (n.publish(p)) {
+        val sent = n.publish(p) { ok ->
+            if (ok) {
+                liveSentAt = 0L
+                lifecycleScope.launch(Dispatchers.IO) { val had = outage.troubled; outage.onLiveAck(p.ts); if (had) LinkRepo.log("Back in service: ${outage.pendingCount()} recorded points to send"); sendBackfill() }
+            } else { outage.markTrouble(); liveSentAt = 0L }
+        }
+        if (sent) {
+            if (liveSentAt == 0L) liveSentAt = now
             lastPubAt = now; lastPubFix = l
             LinkRepo.update { it.copy(lastPublish = now) }
+        } else outage.markTrouble()
+    }
+
+    /** 2.5: out-of-service detection: sharing is on but positions can't be delivered (link down, or not confirmed in 45 s). */
+    private fun checkService() {
+        val n = net ?: return
+        val now = System.currentTimeMillis()
+        if (!n.online && lastLoc != null) outage.markTrouble()
+        val sentAt = liveSentAt
+        if (sentAt > 0 && now - sentAt > com.victor.traillink.core.OutageQueue.ACK_TIMEOUT_MS) {
+            if (!outage.troubled) LinkRepo.log("Internet: position not confirmed for 45 s; recording track for backfill")
+            outage.markTrouble()
         }
+        LinkRepo.update { it.copy(backfillQueued = outage.size(), backfillOut = outage.troubled) }
+        if (n.online && !outage.troubled && outage.pendingCount() > 0 && now - backfillTriedAt > 60_000)
+            lifecycleScope.launch(Dispatchers.IO) { sendBackfill() }
+    }
+
+    /** Sends the recorded out-of-service points in chunks of 500, one at a time; each is removed only after the broker confirms it. */
+    private suspend fun sendBackfill() {
+        if (backfillBusy) return
+        backfillBusy = true
+        try {
+            backfillTriedAt = System.currentTimeMillis()
+            val s = Prefs.settings.value
+            var sentPts = 0; var chunks = 0
+            while (true) {
+                val n = net ?: break; val key = netKey ?: break
+                if (!n.online || outage.troubled) break
+                val batch = outage.nextBatch()
+                if (batch.isEmpty()) break
+                val b = com.victor.traillink.core.Backfill(s.deviceId, s.myName, s.myShort, Prefs.nextSeq(this), batch)
+                val bytes = com.victor.traillink.core.BackfillWire.seal(key, b)
+                if (!n.publishConfirmed(com.victor.traillink.core.BackfillWire.sub(s.deviceId, outage.slot), bytes, retained = true, timeoutMs = 20_000)) {
+                    LinkRepo.log("Backfill: send not confirmed, will retry"); break
+                }
+                outage.confirmSent(batch)
+                sentPts += batch.size; chunks++
+                delay(1_500)   // rate limit
+            }
+            LinkRepo.update { it.copy(backfillQueued = outage.size(), backfillOut = outage.troubled) }
+            if (sentPts > 0) LinkRepo.log("Backfill: sent $sentPts recorded points ($chunks chunk${if (chunks == 1) "" else "s"})")
+        } finally { backfillBusy = false }
+    }
+
+    private suspend fun onBackfill(rel: String, bytes: ByteArray) {
+        val key = netKey ?: return
+        val b = com.victor.traillink.core.BackfillWire.open(key, bytes) ?: return
+        if (!rel.startsWith("b/${b.id}/") || b.id == Prefs.settings.value.deviceId) return
+        val added = store.onBackfill(b)
+        if (added > 0) { LinkRepo.log("Internet: $added backfilled track points from ${b.name}"); updateNotification() }
     }
 
     // ---------------------------------------------------------------- notifications & lost contact
