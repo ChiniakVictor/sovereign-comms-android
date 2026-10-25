@@ -1,6 +1,6 @@
 # Sovereign Comms for Android
 
-Source code for Sovereign Comms for Android 2.5, made by Victor.
+Source code for Sovereign Comms for Android 2.5.1, made by Victor.
 
 Off-grid position sharing, messaging, push-to-talk and maps over Meshtastic LoRa radios, with optional internet sharing (MQTT) and calls (WebRTC) when there is service. Offline USGS topo and world maps, trails, easements and pins.
 

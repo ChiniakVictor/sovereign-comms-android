@@ -13,7 +13,8 @@ import java.util.Locale
 
 enum class Conn(val label: String) {
     IDLE("Not connected"), BONDING("Pairing (enter PIN)…"), CONNECTING("Connecting…"),
-    SYNCING("Reading radio…"), CONNECTED("Connected"), RECONNECTING("Reconnecting…"), FAILED("Connection failed")
+    SYNCING("Reading radio…"), CONNECTED("Connected"), RECONNECTING("Reconnecting…"), FAILED("Connection failed"),
+    NOT_FOUND("Radio not found")
 }
 
 data class RadioInfo(
@@ -49,6 +50,7 @@ data class LinkState(
     val lastFixAt: Long = 0,
     val msgTick: Int = 0,
     val talking: String? = null,     // who is talking right now (voice)
+    val lookingFor: String? = null,  // 2.5.1: name of the radio being looked for (status line), null when not looking
 )
 
 data class SetupProgress(val running: Boolean = false, val steps: List<String> = emptyList(), val done: Boolean = false, val error: String? = null)
@@ -63,6 +65,7 @@ object LinkRepo {
     val setup: StateFlow<SetupProgress> get() = _setup
 
     @Volatile var sessionPasskey: ByteString? = null
+    @Volatile var launchLookDone = false   // 2.5.1: the remembered radio is looked for once per app start, not on every fold/rotate
     @Volatile var controller: Controller? = null
 
     interface Controller {

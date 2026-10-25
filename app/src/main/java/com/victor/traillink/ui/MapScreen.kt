@@ -196,7 +196,7 @@ fun MapScreen(vm: AppViewModel, handle: MapHandle, bottomInset: Dp, onGoRadio: (
             val sharing = settings.netSharing && settings.netReady && settings.internetAllowed
             val parts = listOfNotNull(
                 if (sharing) "🌐 ${link.net.label}" + (if (link.lastPublish > 0) " · sent ${Geo.formatAge(now - link.lastPublish)}" else "") else null,
-                if (link.conn != Conn.IDLE || !sharing) "📡 ${link.conn.label}" else null)
+                if (link.conn != Conn.IDLE || !sharing) "📡 ${link.lookingFor?.let { "Looking for $it…" } ?: link.conn.label}" else null)
             Row(Modifier.padding(start = 8.dp, top = 4.dp).clip(RoundedCornerShape(10.dp)).background(Glass)
                 .clickable { if (sharing || settings.netReady) onGoInternet() else onGoRadio() }.padding(horizontal = 8.dp, vertical = 3.dp)) {
                 Text(parts.joinToString("   "), fontSize = 12.sp, color = Color(0xFFCFD8DC), maxLines = 1)

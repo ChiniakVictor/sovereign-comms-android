@@ -22,8 +22,8 @@ android {
         applicationId = "com.victor.traillink"
         minSdk = 26
         targetSdk = 35
-        versionCode = 21
-        versionName = "2.5"
+        versionCode = 22
+        versionName = "2.5.1"
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
 

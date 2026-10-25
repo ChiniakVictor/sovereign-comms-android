@@ -15,6 +15,7 @@ data class Settings(
     val dimMap: Boolean = true,
     val lastDevice: String? = null,
     val lastDeviceName: String? = null,
+    val lastDeviceNode: Long = 0,           // 2.5.1: node number of the remembered radio (lastDevice = its Bluetooth address)
     val autoReconnect: Boolean = true,
     val keepScreenOn: Boolean = false,
     // ---- internet sharing (1.1)
@@ -119,6 +120,7 @@ object Prefs {
             dimMap = p.getBoolean("dimMap", true),
             lastDevice = p.getString("lastDevice", null),
             lastDeviceName = p.getString("lastDeviceName", null),
+            lastDeviceNode = p.getLong("lastDeviceNode", 0),
             autoReconnect = p.getBoolean("autoReconnect", true),
             keepScreenOn = p.getBoolean("keepScreenOn", false),
             transport = runCatching { Transport.valueOf(p.getString("transport", "AUTO")!!) }.getOrDefault(Transport.AUTO),
@@ -181,7 +183,7 @@ object Prefs {
             .putBoolean("metric", n.metric).putInt("lostMinutes", n.lostMinutes)
             .putBoolean("lostAlarm", n.lostAlarm).putInt("trailHours", n.trailHours)
             .putBoolean("dimMap", n.dimMap).putString("lastDevice", n.lastDevice)
-            .putString("lastDeviceName", n.lastDeviceName).putBoolean("autoReconnect", n.autoReconnect)
+            .putString("lastDeviceName", n.lastDeviceName).putLong("lastDeviceNode", n.lastDeviceNode).putBoolean("autoReconnect", n.autoReconnect)
             .putBoolean("keepScreenOn", n.keepScreenOn)
             .putString("transport", n.transport.name).putBoolean("netSharing", n.netSharing)
             .putString("netGroup", n.netGroup).putString("netKeyHex", n.netKeyHex)

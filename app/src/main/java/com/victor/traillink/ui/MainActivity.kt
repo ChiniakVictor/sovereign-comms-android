@@ -27,6 +27,8 @@ import androidx.compose.ui.unit.sp
 import com.victor.traillink.data.Prefs
 import com.victor.traillink.map.OfflineMaps
 import com.victor.traillink.service.LinkRepo
+import com.victor.traillink.service.Conn
+import com.victor.traillink.core.RadioPolicy
 import com.victor.traillink.service.LinkService
 import kotlinx.coroutines.flow.MutableStateFlow
 
@@ -38,16 +40,29 @@ class MainActivity : ComponentActivity() {
     private val about = MutableStateFlow(false)
     private val mapHandle = MapHandle()
 
-    private val perms = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { vm.startSensors(this) }
+    private val perms = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { vm.startSensors(this); lookForRememberedRadio() }
+
+    /** 2.5.1: once per app start, look for the radio that connected before (that one only, 30 s cap, in LinkService).
+     *  Never connected: nothing is scanned or connected until Radio > Search for radios. */
+    private fun lookForRememberedRadio() {
+        val s = Prefs.settings.value
+        val st = LinkRepo.state.value
+        if (LinkRepo.launchLookDone) return
+        val busy = st.conn != Conn.IDLE && st.conn != Conn.NOT_FOUND && st.conn != Conn.FAILED
+        if (!RadioPolicy.lookAtLaunch(s.lastDevice, s.radioAllowed, busy)) { LinkRepo.launchLookDone = true; return }
+        if (Build.VERSION.SDK_INT >= 31 && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != android.content.pm.PackageManager.PERMISSION_GRANTED) return
+        LinkRepo.launchLookDone = true
+        LinkService.send(this, LinkService.ACTION_LOOK)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         Prefs.load(this)
-        val need = mutableListOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
-        if (Build.VERSION.SDK_INT >= 31) need += listOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
-        if (Build.VERSION.SDK_INT >= 33) need += Manifest.permission.POST_NOTIFICATIONS
+        // 2.5.1: Bluetooth permission only if there is a remembered radio to reconnect to (Search asks when tapped)
+        val need = RadioPolicy.launchPermissions(Build.VERSION.SDK_INT, Prefs.settings.value.lastDevice, Prefs.settings.value.radioAllowed)
         if (need.any { checkSelfPermission(it) != android.content.pm.PackageManager.PERMISSION_GRANTED }) perms.launch(need.toTypedArray())
+        else lookForRememberedRadio()
         handleIntent(intent)
         OfflineMaps.refresh(this)
         if (Prefs.settings.value.netSharing) LinkService.send(this, LinkService.ACTION_NET_REFRESH)

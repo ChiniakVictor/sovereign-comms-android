@@ -24,6 +24,8 @@ import com.victor.traillink.ble.MeshBle
 import com.victor.traillink.core.Geo
 import com.victor.traillink.core.MeshCodec
 import com.victor.traillink.core.Psk
+import com.victor.traillink.core.RadioPolicy
+import com.victor.traillink.core.lookForRadio
 import com.victor.traillink.data.NodeEntity
 import com.victor.traillink.data.Prefs
 import com.victor.traillink.data.TrailDb
@@ -39,6 +41,7 @@ class LinkService : LifecycleService(), MeshBle.Listener, LinkRepo.Controller {
 
     companion object {
         const val ACTION_CONNECT = "connect"; const val ACTION_DISCONNECT = "disconnect"
+        const val ACTION_LOOK = "look_remembered"   // 2.5.1: look for the remembered radio only (30 s cap)
         @Volatile var sharingActive = false
         @Volatile var sharingSince = 0L
         const val ACTION_NET_REFRESH = "net_refresh"; const val ACTION_NET_STOP_FORGET = "net_stop_forget"
@@ -156,7 +159,8 @@ class LinkService : LifecycleService(), MeshBle.Listener, LinkRepo.Controller {
         super.onStartCommand(intent, flags, startId)
         goForeground()
         when (intent?.action) {
-            ACTION_CONNECT -> intent.getStringExtra(EXTRA_ADDRESS)?.let { connect(it, intent.getStringExtra(EXTRA_NAME)) }
+            ACTION_CONNECT -> intent.getStringExtra(EXTRA_ADDRESS)?.let { connect(it, intent.getStringExtra(EXTRA_NAME), remembered = false) }
+            ACTION_LOOK -> lookForRemembered() ?: stopIfIdle()
             ACTION_DISCONNECT -> { disconnect(); stopIfIdle() }
             ACTION_NET_REFRESH -> { refreshNet(); stopIfIdle() }
             ACTION_SEND_MSG -> {
@@ -174,8 +178,7 @@ class LinkService : LifecycleService(), MeshBle.Listener, LinkRepo.Controller {
             ACTION_NET_STOP_FORGET -> { stopNet(clearRetained = true); Prefs.update(this) { it.copy(netSharing = false, netKeyHex = null, netGroup = null) }; stopIfIdle() }
             null -> { // restarted by the system: resume last connection / internet sharing
                 refreshNet()
-                Prefs.settings.value.lastDevice?.takeIf { Prefs.settings.value.autoReconnect && Prefs.settings.value.radioAllowed }?.let { connect(it, Prefs.settings.value.lastDeviceName) }
-                    ?: stopIfIdle()
+                (if (Prefs.settings.value.autoReconnect) lookForRemembered() else null) ?: stopIfIdle()
             }
         }
         return START_STICKY
@@ -218,37 +221,89 @@ class LinkService : LifecycleService(), MeshBle.Listener, LinkRepo.Controller {
     private fun granted(p: String) = ContextCompat.checkSelfPermission(this, p) == PackageManager.PERMISSION_GRANTED
 
     // ---------------------------------------------------------------- BLE connection
-    private fun connect(address: String, name: String?) {
+    /** 2.5.1: the remembered radio only, at most RadioPolicy.LOOK_CAP_MS. Null if there is nothing to look for. */
+    private fun lookForRemembered(): Unit? {
+        val st = Prefs.settings.value
+        val addr = st.lastDevice?.takeIf { RadioPolicy.validAddress(it) && st.radioAllowed } ?: return null
+        if (wantConnected == addr) return Unit
+        if (Build.VERSION.SDK_INT >= 31 && !granted(Manifest.permission.BLUETOOTH_CONNECT)) {
+            LinkRepo.update { it.copy(conn = Conn.NOT_FOUND, error = "Bluetooth permission is off, so the remembered radio can't be reached. Tap Search for radios.") }
+            return null
+        }
+        connect(addr, st.lastDeviceName, remembered = true); return Unit
+    }
+
+    /**
+     * remembered = true: app opened (or service restarted) and looks for the radio that connected before, 30 s cap.
+     * remembered = false: the user tapped a radio found by Search (up to 2 min, time for the pairing PIN).
+     * Either way it stops when the time is up ("Radio not found"), no endless retries. After a successful sync the radio
+     * is remembered (Prefs.lastDevice = its Bluetooth address). A working link that drops is looked for again
+     * RadioPolicy.LINK_RETRIES times (30 s each, with back-off), then it stops.
+     */
+    private fun connect(address: String, name: String?, remembered: Boolean) {
         wantConnected = address
-        Prefs.update(this) { it.copy(lastDevice = address, lastDeviceName = name ?: it.lastDeviceName) }
+        val label = name ?: address
         LinkRepo.radio { RadioInfo(address = address, name = name) }
+        LinkRepo.update { it.copy(conn = Conn.CONNECTING, error = null, lookingFor = if (remembered) label else null) }
         connectJob?.cancel()
-        ble?.close()
+        ble?.close(); ble = null
         if (wake == null) wake = getSystemService(PowerManager::class.java).newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "TrailLink:link")
         connectJob = lifecycleScope.launch {
-            var backoff = 3_000L
+            val cap = if (remembered) RadioPolicy.LOOK_CAP_MS else RadioPolicy.MANUAL_CAP_MS
+            LinkRepo.log(if (remembered) "Looking for $label (up to ${cap / 1000} s)" else "Connecting to $label")
+            if (!find(address, label, cap, looking = remembered)) { giveUp(label, cap, notFound = true); return@launch }
+            var drops = 0
             while (isActive && wantConnected == address) {
-                val b = MeshBle(this@LinkService, lifecycleScope, this@LinkService)
-                ble = b
-                try {
-                    LinkRepo.log("Connecting to ${name ?: address}")
-                    b.connect(address)
-                    backoff = 3_000L
-                    // stay here until the link drops
-                    while (isActive && !b.closed && LinkRepo.state.value.conn != Conn.RECONNECTING) delay(1000)
-                } catch (e: CancellationException) {
-                    b.close(); throw e
-                } catch (e: Exception) {
-                    LinkRepo.log("Connect failed: ${e.message}")
-                    LinkRepo.update { it.copy(conn = Conn.RECONNECTING, error = e.message) }
-                }
-                b.close()
+                val b = ble
+                // stay here until the link drops
+                while (isActive && b != null && !b.closed && LinkRepo.state.value.conn != Conn.RECONNECTING) delay(1000)
+                b?.close(); if (ble === b) ble = null
                 if (wantConnected != address) break
-                LinkRepo.update { it.copy(conn = Conn.RECONNECTING) }
-                delay(backoff)
-                backoff = (backoff * 2).coerceAtMost(30_000L)
+                if (!RadioPolicy.retryAfterDrop(Prefs.settings.value.autoReconnect, drops)) {
+                    giveUp(label, 0, notFound = false); return@launch
+                }
+                LinkRepo.update { it.copy(conn = Conn.RECONNECTING, lookingFor = label) }
+                delay(RadioPolicy.backoffMs(drops)); drops++
+                LinkRepo.log("Link lost: looking for $label again ($drops of ${RadioPolicy.LINK_RETRIES})")
+                if (find(address, label, RadioPolicy.LOOK_CAP_MS, looking = true)) drops = 0
+                else if (drops >= RadioPolicy.LINK_RETRIES) { giveUp(label, RadioPolicy.LOOK_CAP_MS, notFound = true); return@launch }
             }
         }
+    }
+
+    /** One bounded lookup: MeshBle connect + config sync, retried until capMs is used up. */
+    private suspend fun find(address: String, label: String, capMs: Long, looking: Boolean): Boolean {
+        LinkRepo.update { it.copy(lookingFor = if (looking) label else null) }
+        val ok = lookForRadio(capMs, { android.os.SystemClock.elapsedRealtime() }, onTry = { n -> if (n > 1) LinkRepo.log("Still looking for $label (try $n)") }) {
+            val b = MeshBle(this@LinkService, lifecycleScope, this@LinkService)
+            ble = b
+            try {
+                b.connect(address)
+                while (LinkRepo.state.value.conn != Conn.CONNECTED) {
+                    if (b.closed || LinkRepo.state.value.conn == Conn.RECONNECTING) throw IllegalStateException("link dropped while reading the radio")
+                    delay(200)
+                }
+            } catch (e: Throwable) {
+                if (e !is CancellationException) LinkRepo.log("Connect failed: ${e.message}")
+                b.close(); if (ble === b) ble = null
+                LinkRepo.update { if (it.conn == Conn.RECONNECTING) it.copy(conn = Conn.CONNECTING) else it }
+                throw e
+            }
+        }
+        if (ok) LinkRepo.update { it.copy(lookingFor = null) }
+        return ok
+    }
+
+    private fun giveUp(label: String, capMs: Long, notFound: Boolean) {
+        wantConnected = null
+        ble?.close(); ble = null
+        wake?.let { if (it.isHeld) it.release() }
+        val msg = if (notFound) "$label was not found within ${capMs / 1000} s. Turn the radio on or bring it closer, then tap Search for radios or Reconnect."
+                  else "Link to $label lost. Tap Reconnect or Search for radios."
+        LinkRepo.log(msg)
+        LinkRepo.update { it.copy(conn = if (notFound) Conn.NOT_FOUND else Conn.FAILED, error = msg, lookingFor = null) }
+        updateNotification()
+        stopIfIdle()
     }
 
     private fun disconnect() {
@@ -257,7 +312,7 @@ class LinkService : LifecycleService(), MeshBle.Listener, LinkRepo.Controller {
         ble?.let { b -> runCatching { runBlocking { withTimeoutOrNull(800) { b.send(MeshCodec.disconnect()) } } } ; b.close() }
         ble = null
         wake?.let { if (it.isHeld) it.release() }
-        LinkRepo.update { it.copy(conn = Conn.IDLE, error = null) }
+        LinkRepo.update { it.copy(conn = Conn.IDLE, error = null, lookingFor = null) }
     }
 
     override fun onState(state: MeshBle.State, detail: String?) {
@@ -301,9 +356,12 @@ class LinkService : LifecycleService(), MeshBle.Listener, LinkRepo.Controller {
             FromRadio.PayloadVariantCase.CHANNEL -> LinkRepo.radio { it.copy(channels = it.channels + (fr.channel.index to fr.channel)) }
             FromRadio.PayloadVariantCase.METADATA -> LinkRepo.radio { it.copy(firmware = fr.metadata.firmwareVersion) }
             FromRadio.PayloadVariantCase.CONFIG_COMPLETE_ID -> if (fr.configCompleteId == configId) {
-                LinkRepo.update { it.copy(conn = Conn.CONNECTED, error = null) }
+                LinkRepo.update { it.copy(conn = Conn.CONNECTED, error = null, lookingFor = null) }
                 wake?.let { if (!it.isHeld) it.acquire() }
                 val r = LinkRepo.state.value.radio
+                // 2.5.1: remember this radio (Bluetooth address + name + node number) only once it has really synced
+                val addr = wantConnected ?: r.address
+                if (addr != null) Prefs.update(this) { it.copy(lastDevice = addr, lastDeviceName = r.longName?.ifBlank { null } ?: r.name ?: it.lastDeviceName, lastDeviceNode = r.myNodeNum) }
                 LinkRepo.log("Synced: ${r.longName ?: "?"} fw ${r.firmware ?: "?"} ${r.lora?.region ?: ""} ${r.lora?.modemPreset ?: ""} ch '${r.primary?.settings?.name ?: ""}'")
                 updateNotification()
             }
@@ -681,7 +739,7 @@ class LinkService : LifecycleService(), MeshBle.Listener, LinkRepo.Controller {
                 "${p.shortName} [${srcBadge(p.posSource)}]: $where · ${Geo.formatAge(now - p.posTime)}"
             }
             val title = listOfNotNull(
-                    if (wantConnected != null) "Radio: ${st.conn.label}" else null,
+                    if (wantConnected != null) "Radio: ${st.lookingFor?.let { "looking for $it…" } ?: st.conn.label}" else null,
                     if (net != null) "Internet: ${st.net.label}" else null).joinToString(" · ").ifBlank { "Sovereign Comms" }
             val warn = when {
                 net != null && !st.locationOn -> "⚠ Phone Location is OFF — your position is not being sent.\n"

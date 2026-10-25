@@ -5,7 +5,13 @@ import android.bluetooth.BluetoothManager
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.ParcelUuid
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import com.victor.traillink.core.RadioPolicy
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -51,6 +57,16 @@ fun RadioScreen(vm: AppViewModel) {
     var scanError by remember { mutableStateOf<String?>(null) }
 
     val adapter = remember { ctx.getSystemService(BluetoothManager::class.java)?.adapter }
+    val settings by com.victor.traillink.data.Prefs.settings.collectAsState()
+    // 2.5.1: Bluetooth permission is asked for here, when Search for radios is tapped (not when the app opens)
+    val searchPerms = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { res ->
+        if (res.values.all { it }) { found.clear(); scanning = true } else scanError = "Search for radios needs the Bluetooth permission (Nearby devices)."
+    }
+    fun startSearch() {
+        val need = RadioPolicy.searchPermissions(Build.VERSION.SDK_INT)
+        if (need.all { ContextCompat.checkSelfPermission(ctx, it) == PackageManager.PERMISSION_GRANTED }) { found.clear(); scanning = true }
+        else searchPerms.launch(need.toTypedArray())
+    }
     val cb = remember {
         object : ScanCallback() {
             override fun onScanResult(type: Int, r: ScanResult) {
@@ -68,11 +84,11 @@ fun RadioScreen(vm: AppViewModel) {
         val sc = adapter?.bluetoothLeScanner
         if (adapter?.isEnabled != true || sc == null) { scanError = "Turn on Bluetooth first"; scanning = false; return@LaunchedEffect }
         // bonded radios show up even when they're not advertising (already connected elsewhere)
-        runCatching { adapter.bondedDevices }.getOrNull().orEmpty().filter { (it.name ?: "").let { n -> n.contains("Meshtastic", true) || n.startsWith("RAK", true) } }
+        runCatching { adapter.bondedDevices }.getOrNull().orEmpty().filter { it.address == settings.lastDevice || (it.name ?: "").let { n -> n.contains("Meshtastic", true) || n.startsWith("RAK", true) } }
             .forEach { found[it.address] = Found(it.address, it.name ?: it.address, 0, true) }
         try {
             sc.startScan(null, ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(), cb)
-            delay(15_000)
+            delay(RadioPolicy.SEARCH_SCAN_MS)
         } catch (e: SecurityException) { scanError = "Bluetooth permission missing" }
         finally { runCatching { sc.stopScan(cb) }; scanning = false }
     }
@@ -83,7 +99,7 @@ fun RadioScreen(vm: AppViewModel) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Card(shape = RoundedCornerShape(16.dp)) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(link.conn.label, style = MaterialTheme.typography.titleLarge,
+                Text(link.lookingFor?.let { "Looking for $it…" } ?: link.conn.label, style = MaterialTheme.typography.titleLarge,
                     color = when (link.conn) { Conn.CONNECTED -> Color(0xFF69F0AE); Conn.IDLE -> Color.Unspecified; else -> Color(0xFFFFD740) })
                 val r = link.radio
                 if (r.name != null || r.address != null) Text("${r.name ?: ""}  ${r.address ?: ""}")
@@ -102,13 +118,36 @@ fun RadioScreen(vm: AppViewModel) {
                 link.error?.let { if (link.conn != Conn.CONNECTED) Text(it, color = Color(0xFFFF8A80)) }
             }
         }
-        if (link.conn != Conn.IDLE) {
+        if (link.conn != Conn.IDLE && link.conn != Conn.NOT_FOUND && link.conn != Conn.FAILED) {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 BigButton("Set up radio", Modifier.weight(1f), enabled = link.conn == Conn.CONNECTED) { LinkRepo.setup { com.victor.traillink.service.SetupProgress() }; wizard = true }
-                BigButton("Disconnect", Modifier.weight(1f), primary = false) { LinkService.send(ctx, LinkService.ACTION_DISCONNECT) }
+                BigButton(if (link.conn == Conn.CONNECTED) "Disconnect" else "Cancel", Modifier.weight(1f), primary = false) { LinkService.send(ctx, LinkService.ACTION_DISCONNECT) }
             }
         }
-        BigButton(if (scanning) "Searching… (15 s)" else "Find radios", Modifier.fillMaxWidth(), enabled = !scanning) { found.clear(); scanning = true }
+        // 2.5.1: the remembered radio (looked for when the app opens) and an always-available Search for radios
+        val remembered = settings.lastDevice?.takeIf { RadioPolicy.validAddress(it) }
+        if (remembered != null) {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Remembered radio: ${settings.lastDeviceName ?: remembered}", fontWeight = FontWeight.Bold)
+                    Text("$remembered · Sovereign Comms looks for it (30 s) when the app opens.", fontSize = 15.sp)
+                    if (link.conn == Conn.IDLE || link.conn == Conn.NOT_FOUND || link.conn == Conn.FAILED) Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        BigButton("Reconnect", Modifier.weight(1f)) {
+                            if (Build.VERSION.SDK_INT >= 31 && ContextCompat.checkSelfPermission(ctx, android.Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) startSearch()
+                            else LinkService.send(ctx, LinkService.ACTION_LOOK)
+                        }
+                        BigButton("Forget", Modifier.weight(1f), primary = false) {
+                            com.victor.traillink.data.Prefs.update(ctx) { it.copy(lastDevice = null, lastDeviceName = null, lastDeviceNode = 0) }
+                        }
+                    }
+                }
+            }
+        } else if (link.conn == Conn.IDLE) {
+            Text("No radio remembered yet. Tap Search for radios (Bluetooth); the radio you connect is remembered and reconnected when the app opens.", fontSize = 15.sp)
+        }
+        BigButton(if (scanning) "Cancel search (searching Bluetooth…)" else "🔍 Search for radios", Modifier.fillMaxWidth()) {
+            if (scanning) scanning = false else startSearch()
+        }
         scanError?.let { Text(it, color = Color(0xFFFF8A80)) }
         found.values.sortedByDescending { it.rssi }.forEach { f ->
             Card(Modifier.fillMaxWidth().clickable {
